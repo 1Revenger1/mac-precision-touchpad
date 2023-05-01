@@ -124,17 +124,28 @@ PtpFilterParsePacket(
 	_In_ PDEVICE_CONTEXT deviceContext
 ) {
 	NTSTATUS status;
+
 	WDFREQUEST ptpRequest;
 	PTP_REPORT ptpOutputReport;
-
-	LARGE_INTEGER currentTSC;
-	LONGLONG tSCDelta;
-	//UINT16 timestamp;
+	WDFMEMORY  ptpRequestMemory;
 
 	const struct TRACKPAD_REPORT_TYPE5* report;
 	const struct TRACKPAD_FINGER_TYPE5* f;
 	size_t raw_n;
 	INT x, y = 0;
+
+	// Pre-flight check: the response size should be sane
+	if (bufferLength < sizeof(struct TRACKPAD_REPORT_TYPE5) || (bufferLength - sizeof(struct TRACKPAD_REPORT_TYPE5)) % sizeof(struct TRACKPAD_FINGER_TYPE5) != 0) {
+		TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_INPUT, "%!FUNC! Malformed input received. Length = %llu. Attempt to reconfigure the device.", bufferLength);
+		WdfTimerStart(deviceContext->HidTransportRecoveryTimer, WDF_REL_TIMEOUT_IN_SEC(3));
+		return;
+	}
+
+	report = (struct TRACKPAD_REPORT_TYPE5*)buffer;
+	if (report->reportId != 0x31) {
+		TraceEvents(TRACE_LEVEL_ERROR, TRACE_INPUT, "%!FUNC! Incorrect report id %x", buffer[0]);
+		return;
+	}
 
 	// Read report and fulfill PTP request. If no report is found, just exit.
 	status = WdfIoQueueRetrieveNextRequest(deviceContext->HidReadQueue, &ptpRequest);
@@ -143,26 +154,12 @@ PtpFilterParsePacket(
 		return;
 	}
 
-	if (buffer[0] != 0x31) {
-		TraceEvents(TRACE_LEVEL_ERROR, TRACE_INPUT, "%!FUNC! Incorrect report id %x", buffer[0]);
-		return;
-	}
-
-	report = (struct TRACKPAD_REPORT_TYPE5*)buffer;
-
 	// Report header
 	ptpOutputReport.ReportID = REPORTID_MULTITOUCH;
 	ptpOutputReport.IsButtonClicked = report->clicks;
+	ptpOutputReport.ScanTime = (report->timestampLow | (report->timestampHigh << 5)) * 10;
 
-	// Capture current timestamp and get input delta in 100us unit
-	KeQueryPerformanceCounter(&currentTSC);
-	tSCDelta = (currentTSC.QuadPart - deviceContext->LastReportTime.QuadPart) / 100;
-	ptpOutputReport.ScanTime = (tSCDelta >= 0xFF) ? 0xFF : (USHORT)tSCDelta;
-	deviceContext->LastReportTime.QuadPart = currentTSC.QuadPart;
-
-
-	// Report required content
-	// Touch
+	// Report fingers
 	raw_n = (bufferLength - sizeof(struct TRACKPAD_REPORT_TYPE5)) / sizeof(struct TRACKPAD_FINGER_TYPE5);
 	if (raw_n >= PTP_MAX_CONTACT_POINTS) raw_n = PTP_MAX_CONTACT_POINTS;
 	ptpOutputReport.ContactCount = (UCHAR)raw_n;
@@ -189,6 +186,25 @@ PtpFilterParsePacket(
 		// Or maybe I used the wrong unit? IDK
 		ptpOutputReport.Contacts[i].Confidence = finger != 7;
 	}
+
+	status = WdfRequestRetrieveOutputMemory(ptpRequest, &ptpRequestMemory);
+	if (!NT_SUCCESS(status))
+	{
+		TraceEvents(TRACE_LEVEL_ERROR, TRACE_INPUT, "%!FUNC! WdfRequestRetrieveOutputBuffer failed with %!STATUS!", status);
+		WdfDeviceSetFailed(deviceContext->Device, WdfDeviceFailedAttemptRestart);
+		return;
+	}
+
+	status = WdfMemoryCopyFromBuffer(ptpRequestMemory, 0, (PVOID) &ptpOutputReport, sizeof(PTP_REPORT));
+	if (!NT_SUCCESS(status))
+	{
+		TraceEvents(TRACE_LEVEL_ERROR, TRACE_INPUT, "%!FUNC! WdfMemoryCopyFromBuffer failed with %!STATUS!", status);
+		WdfDeviceSetFailed(deviceContext->Device, WdfDeviceFailedAttemptRestart);
+		return;
+	}
+
+	WdfRequestSetInformation(ptpRequest, sizeof(PTP_REPORT));
+	WdfRequestComplete(ptpRequest, status);
 }
 
 VOID
@@ -201,11 +217,6 @@ PtpFilterInputRequestCompletionCallback(
 {
 	PWORKER_REQUEST_CONTEXT requestContext;
 	PDEVICE_CONTEXT deviceContext;
-	//NTSTATUS status;
-
-	//WDFREQUEST ptpRequest;
-	PTP_REPORT ptpOutputReport;
-	//WDFMEMORY  ptpRequestMemory;
 
 	size_t responseLength;
 	PUCHAR responseBuffer;
@@ -224,47 +235,25 @@ PtpFilterInputRequestCompletionCallback(
 		goto cleanup;
 	}
 
-	// Pre-flight check 1: if size is 0, this is not something we need. Ignore the read, and issue next request.
+	// Pre-flight check: if size is 0, this is not something we need. Ignore the read, and issue next request.
 	if (responseLength <= 0) {
 		WdfWorkItemEnqueue(requestContext->DeviceContext->HidTransportRecoveryWorkItem);
 		goto cleanup;
 	}
 
 	// Check the report ID. Sometimes two reports can be sent within a packet
-	//if ()
-
-	// Pre-flight check 2: the response size should be sane
-	if (responseLength < deviceContext->InputHeaderSize || (responseLength - deviceContext->InputHeaderSize) % deviceContext->InputFingerSize != 0) {
-		TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_INPUT, "%!FUNC! Malformed input received. Length = %llu. Attempt to reconfigure the device.", responseLength);
-		WdfTimerStart(deviceContext->HidTransportRecoveryTimer, WDF_REL_TIMEOUT_IN_SEC(3));
-		goto cleanup;
+	if (responseBuffer[0] == 0xF7) {
+		SIZE_T pkt1Size = responseBuffer[1];
+		SIZE_T pkt2Size = responseLength - 2 - pkt1Size;
+		PtpFilterParsePacket(responseBuffer + 2, pkt1Size, deviceContext);
+		PtpFilterParsePacket(responseBuffer + 2 + pkt1Size, pkt2Size, deviceContext);
 	}
-
-	
-
-	// Button
-	if ((responseBuffer[deviceContext->InputButtonDelta] & 1) != 0) {
-		ptpOutputReport.IsButtonClicked = TRUE;
+	else if (responseBuffer[0] == 0x31) {
+		PtpFilterParsePacket(responseBuffer, responseLength, deviceContext);
 	}
-
-	/*status = WdfRequestRetrieveOutputMemory(ptpRequest, &ptpRequestMemory);
-	if (!NT_SUCCESS(status))
-	{
-		TraceEvents(TRACE_LEVEL_ERROR, TRACE_INPUT, "%!FUNC! WdfRequestRetrieveOutputBuffer failed with %!STATUS!", status);
-		WdfDeviceSetFailed(deviceContext->Device, WdfDeviceFailedAttemptRestart);
-		goto cleanup;
+	else {
+		TraceEvents(TRACE_LEVEL_ERROR, TRACE_INPUT, "%!FUNC! Invalid Report ID %x from MT2!", responseBuffer[0]);
 	}
-
-	status = WdfMemoryCopyFromBuffer(ptpRequestMemory, 0, (PVOID) &ptpOutputReport, sizeof(PTP_REPORT));
-	if (!NT_SUCCESS(status))
-	{
-		TraceEvents(TRACE_LEVEL_ERROR, TRACE_INPUT, "%!FUNC! WdfMemoryCopyFromBuffer failed with %!STATUS!", status);
-		WdfDeviceSetFailed(deviceContext->Device, WdfDeviceFailedAttemptRestart);
-		goto cleanup;
-	}
-
-	WdfRequestSetInformation(ptpRequest, sizeof(PTP_REPORT));
-	WdfRequestComplete(ptpRequest, status);*/
 
 cleanup:
 	// Cleanup
