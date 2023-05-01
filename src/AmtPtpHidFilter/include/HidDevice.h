@@ -37,50 +37,33 @@
 #define MAX_FINGERS		16
 #define MAX_FINGER_ORIENTATION	16384
 
-/* button data structure */
-typedef struct _TRACKPAD_BUTTON_DATA {
-	UCHAR unknown1;			/* constant */
-	UCHAR button;			/* left button */
-	UCHAR rel_x;			/* relative x coordinate */
-	UCHAR rel_y;			/* relative y coordinate */
-} TRACKPAD_BUTTON_DATA, *PTRACKPAD_BUTTON_DATA;
+#pragma pack( push, 1 )
+#pragma warning( push )
+#pragma warning( disable : 4200 )
 
-#include <pshpack2.h>
-/* trackpad finger structure, le16-aligned */
-typedef struct _TRACKPAD_FINGER {
-	USHORT origin;		/* zero when switching track finger */
-	USHORT abs_x;		/* absolute x coodinate */
-	USHORT abs_y;		/* absolute y coodinate */
-	USHORT rel_x;		/* relative x coodinate */
-	USHORT rel_y;		/* relative y coodinate */
-	USHORT tool_major;	/* tool area, major axis */
-	USHORT tool_minor;	/* tool area, minor axis */
-	USHORT orientation;	/* 16384 when point, else 15 bit angle */
-	USHORT touch_major;	/* touch area, major axis */
-	USHORT touch_minor;	/* touch area, minor axis */
-	USHORT unused[2];	/* zeros */
-	USHORT pressure;	/* pressure on forcetouch touchpad */
-	USHORT multi;		/* one finger: varies, more fingers: constant */
-} TRACKPAD_FINGER, *PTRACKPAD_FINGER;
-
-/* Trackpad finger structure for type5 (magic trackpad), le16-aligned */
-typedef struct _TRACKPAD_FINGER_TYPE5
+struct TRACKPAD_FINGER_TYPE5
 {
-	UCHAR AbsoluteX;			/* absolute x coodinate */
-	UCHAR AbsoluteXY;			/* absolute x,y coodinate */
-	UCHAR AbsoluteY[2];			/* absolute y coodinate */
-	UCHAR TouchMajor;			/* touch area, major axis */
-	UCHAR TouchMinor;			/* touch area, minor axis */
-	UCHAR Size;					/* tool area, size */
-	UCHAR Pressure;				/* pressure on forcetouch touchpad */
-	union _ORIDENTATION_AND_ORIGIN
-	{
-		struct _CONTACT_IDENTIFIER
-		{
-			UCHAR Id : 4;
-			UCHAR Orientation : 4;
-		} ContactIdentifier;
-		UCHAR RawValue;
-	} OrientationAndOrigin;
-} TRACKPAD_FINGER_TYPE5, *PTRACKPAD_FINGER_TYPE5;
-#include <poppack.h>
+	UINT32 coords;			/* absolute x coodinate */
+	UCHAR touchMajor;			/* touch area, major axis */
+	UCHAR touchMinor;			/* touch area, minor axis */
+	UCHAR size;					/* tool area, size */
+	UCHAR pressure;				/* pressure on forcetouch touchpad */
+	UCHAR id : 4;
+	UCHAR orientation : 4;
+};
+
+struct TRACKPAD_REPORT_TYPE5
+{
+	UCHAR reportId;
+	UINT8 clicks : 1;
+	UINT8 : 2;
+	UINT8 timestampLow : 5;
+	UINT16 timestampHigh;
+	struct TRACKPAD_FINGER_TYPE5 fingers[];
+};
+
+#pragma warning( pop )
+#pragma pack( pop )
+
+static_assert(sizeof(struct TRACKPAD_FINGER_TYPE5) == 9, "Unexpected MAGIC_TRACKPAD_INPUT_REPORT_FINGER size");
+static_assert(sizeof(struct TRACKPAD_REPORT_TYPE5) == 4, "Unexpected MAGIC_TRACKPAD_INPUT_REPORT_FINGER size");

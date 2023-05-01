@@ -142,25 +142,42 @@ __declspec(align(2)) struct TRACKPAD_FINGER {
 };
 
 /* Trackpad finger structure for type5 (magic trackpad), le16-aligned */
-__declspec(align(2)) struct TRACKPAD_FINGER_TYPE5 
+#pragma pack( push, 1 )
+#pragma warning( push )
+#pragma warning( disable : 4200 )
+struct TRACKPAD_FINGER_TYPE5
 {
-	UCHAR AbsoluteX;			/* absolute x coodinate */
-	UCHAR AbsoluteXY;			/* absolute x,y coodinate */
-	UCHAR AbsoluteY[2];			/* absolute y coodinate */
-	UCHAR TouchMajor;			/* touch area, major axis */
-	UCHAR TouchMinor;			/* touch area, minor axis */
-	UCHAR Size;					/* tool area, size */
-	UCHAR Pressure;				/* pressure on forcetouch touchpad */
-	union 
-	{
-		struct 
-		{
-			UCHAR Id : 4;
-			UCHAR Orientation : 4;
-		} ContactIdentifier;
-		UCHAR RawOrientationAndOrigin;
-	};
+	UINT coords;			/* absolute x coodinate */
+	UCHAR touchMajor;			/* touch area, major axis */
+	UCHAR touchMinor;			/* touch area, minor axis */
+	UCHAR size;					/* tool area, size */
+	UCHAR pressure;				/* pressure on forcetouch touchpad */
+	UCHAR id : 4;
+	UCHAR orientation : 4;
 };
+
+struct TRACKPAD_REPORT_TYPE5
+{
+	// This is a bit weird, is it the BT packet embedded into the USB packet with extra data?
+	// This could be the relative mouse data packet
+	UCHAR reportId;
+	UCHAR button;
+	UCHAR unused[5];
+	UCHAR TouchActive;
+
+	UCHAR reportId2;
+	UINT8 clicks : 1;
+	UINT8 : 2;
+	UINT8 timestampLow : 5;
+	UINT16 timestampHigh;
+	struct TRACKPAD_FINGER_TYPE5 fingers[];
+};
+
+#pragma warning( pop )
+#pragma pack( pop )
+
+static_assert(sizeof(struct TRACKPAD_FINGER_TYPE5) == 9, "Unexpected MAGIC_TRACKPAD_INPUT_REPORT_FINGER size");
+static_assert(sizeof(struct TRACKPAD_REPORT_TYPE5) == 12, "Unexpected MT2 Header size");
 
 /* device-specific parameters */
 struct BCM5974_PARAM {

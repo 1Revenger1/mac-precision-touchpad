@@ -25,6 +25,7 @@ typedef struct _DEVICE_CONTEXT
 	BOOL                        IsButtonReportOn;
 
 	LARGE_INTEGER				PerfCounter;
+	UINT32						LastTimestampMS;
 
 } DEVICE_CONTEXT, *PDEVICE_CONTEXT;
 

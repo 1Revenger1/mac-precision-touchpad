@@ -335,8 +335,8 @@ AmtPtpServiceTouchInputInterrupt(
 			PtpReport.Contacts[i].ContactID = (UCHAR) i;
 			PtpReport.Contacts[i].X = x;
 			PtpReport.Contacts[i].Y = y;
-			PtpReport.Contacts[i].TipSwitch = (AmtRawToInteger(f->touch_major) << 1) >= 200;
-			PtpReport.Contacts[i].Confidence = (AmtRawToInteger(f->touch_minor) << 1) > 0;
+			PtpReport.Contacts[i].TipSwitch = 0;// (AmtRawToInteger(f->touch_major) << 1) >= 200;
+			PtpReport.Contacts[i].Confidence = 0; // (AmtRawToInteger(f->touch_minor) << 1) > 0;
 
 #ifdef INPUT_CONTENT_TRACE
 			TraceEvents(
@@ -413,16 +413,14 @@ AmtPtpServiceTouchInputInterruptType5(
 	_In_ size_t NumBytesTransferred
 )
 {
-
 	NTSTATUS   Status;
 	WDFREQUEST Request;
 	WDFMEMORY  RequestMemory;
 	PTP_REPORT PtpReport;
-	LARGE_INTEGER CurrentPerfCounter;
-	LONGLONG PerfCounterDelta;
+	UINT32 timestamp;
 
-	const struct TRACKPAD_FINGER *f;
-	const struct TRACKPAD_FINGER_TYPE5 *f_type5;
+	const struct TRACKPAD_FINGER_TYPE5* f;
+	const struct TRACKPAD_REPORT_TYPE5* report;
 
 	TraceEvents(
 		TRACE_LEVEL_INFORMATION, 
@@ -436,8 +434,6 @@ AmtPtpServiceTouchInputInterruptType5(
 
 	INT x, y = 0;
 	size_t raw_n, i = 0;
-	size_t headerSize = (unsigned int) DeviceContext->DeviceInfo->tp_header;
-	size_t fingerprintSize = (unsigned int) DeviceContext->DeviceInfo->tp_fsize;
 
 	Status = WdfIoQueueRetrieveNextRequest(
 		DeviceContext->InputQueue,
@@ -467,23 +463,17 @@ AmtPtpServiceTouchInputInterruptType5(
 		goto exit;
 	}
 
-	QueryPerformanceCounter(
-		&CurrentPerfCounter
-	);
+	report = (const struct TRACKPAD_REPORT_TYPE5*)Buffer;
 
-	// Scan time is in 100us
-	PerfCounterDelta = (CurrentPerfCounter.QuadPart - DeviceContext->PerfCounter.QuadPart) / 100;
-	// Only two bytes allocated
-	if (PerfCounterDelta > 0xFF)
-	{
-		PerfCounterDelta = 0xFF;
-	}
+	// MT reports timestamps in milliseconds
+	timestamp = report->timestampLow | (report->timestampHigh << 5);
 
-	PtpReport.ScanTime = (USHORT) PerfCounterDelta;
+	// 1 MS = 10 * 100us
+	PtpReport.ScanTime = (USHORT) (timestamp * 10);
 
 	// Type 5 finger report
 	if (DeviceContext->IsSurfaceReportOn) {
-		raw_n = (NumBytesTransferred - headerSize) / fingerprintSize;
+		raw_n = (NumBytesTransferred - sizeof(struct TRACKPAD_REPORT_TYPE5)) / sizeof(struct TRACKPAD_FINGER_TYPE5);
 		if (raw_n >= PTP_MAX_CONTACT_POINTS) raw_n = PTP_MAX_CONTACT_POINTS;
 		PtpReport.ContactCount = (UCHAR)raw_n;
 
@@ -498,30 +488,28 @@ AmtPtpServiceTouchInputInterruptType5(
 
 		// Fingers to array
 		for (i = 0; i < raw_n; i++) {
+			f = &report->fingers[i];
 
-			UCHAR *f_base = Buffer + headerSize + DeviceContext->DeviceInfo->tp_delta;
-			f = (const struct TRACKPAD_FINGER*) (f_base + i * fingerprintSize);
-			f_type5 = (const struct TRACKPAD_FINGER_TYPE5*) f;
-
-			USHORT tmp_x = (*((USHORT*)f_type5)) & 0x1fff;
-			UINT tmp_y = (INT)(*((UINT*)f_type5));
+			USHORT tmp_x = f->coords & 0x1fff;
+			USHORT tmp_y = (f->coords >> 13) & 0x1fff;
+			UCHAR finger = (f->coords >> 26) & 0x7;
+			UCHAR state = (f->coords >> 29) & 0x7;
 
 			x = (SHORT) (tmp_x << 3) >> 3;
-			y = -(INT) (tmp_y << 6) >> 19;
+			y = -(SHORT) (tmp_y << 3) >> 3;
 
 			x = (x - DeviceContext->DeviceInfo->x.min) > 0 ? (x - DeviceContext->DeviceInfo->x.min) : 0;
 			y = (y - DeviceContext->DeviceInfo->y.min) > 0 ? (y - DeviceContext->DeviceInfo->y.min) : 0;
 
-			PtpReport.Contacts[i].ContactID = f_type5->ContactIdentifier.Id;
+			PtpReport.Contacts[i].ContactID = f->id;
 			PtpReport.Contacts[i].X = (USHORT) x;
 			PtpReport.Contacts[i].Y = (USHORT) y;
-			PtpReport.Contacts[i].TipSwitch = (AmtRawToInteger(f_type5->TouchMajor) << 1) > 0;
+			PtpReport.Contacts[i].TipSwitch = (state & 0x4) != 0;
 
 			// The Microsoft spec says reject any input larger than 25mm. This is not ideal
 			// for Magic Trackpad 2 - so we raised the threshold a bit higher.
 			// Or maybe I used the wrong unit? IDK
-			PtpReport.Contacts[i].Confidence = (AmtRawToInteger(f_type5->TouchMinor) << 1) < 345 && 
-				(AmtRawToInteger(f_type5->TouchMinor) << 1) < 345;
+			PtpReport.Contacts[i].Confidence = finger != 7;
 
 #ifdef INPUT_CONTENT_TRACE
 			TraceEvents(
@@ -533,20 +521,16 @@ AmtPtpServiceTouchInputInterruptType5(
 				PtpReport.Contacts[i].Y,
 				PtpReport.Contacts[i].TipSwitch,
 				PtpReport.Contacts[i].Confidence,
-				AmtRawToInteger(f_type5->TouchMajor) << 1,
-				AmtRawToInteger(f_type5->TouchMinor) << 1,
-				f_type5->ContactIdentifier.Id
+				AmtRawToInteger(f_type5->touchMajor) << 1,
+				AmtRawToInteger(f_type5->touchMinor) << 1,
+				f_type5->id
 			);
 #endif
 		}
 	}
 
 	// Button
-	if (DeviceContext->IsButtonReportOn) {
-		if (Buffer[DeviceContext->DeviceInfo->tp_button]) {
-			PtpReport.IsButtonClicked = TRUE;
-		}
-	}
+	PtpReport.IsButtonClicked = report->button;
 
 	// Write output
 	Status = WdfMemoryCopyFromBuffer(
