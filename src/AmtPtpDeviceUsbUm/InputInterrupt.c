@@ -509,7 +509,7 @@ AmtPtpServiceTouchInputInterruptType5(
 			// The Microsoft spec says reject any input larger than 25mm. This is not ideal
 			// for Magic Trackpad 2 - so we raised the threshold a bit higher.
 			// Or maybe I used the wrong unit? IDK
-			PtpReport.Contacts[i].Confidence = finger != 7;
+			PtpReport.Contacts[i].Confidence = finger != 6;
 
 #ifdef INPUT_CONTENT_TRACE
 			TraceEvents(
