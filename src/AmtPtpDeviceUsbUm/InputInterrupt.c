@@ -277,14 +277,8 @@ AmtPtpServiceTouchInputInterrupt(
 	);
 
 	// Scan time is in 100us
-	PerfCounterDelta = (CurrentPerfCounter.QuadPart - DeviceContext->PerfCounter.QuadPart) / 100;
-	// Only two bytes allocated
-	if (PerfCounterDelta > 0xFF)
-	{
-		PerfCounterDelta = 0xFF;
-	}
-
-	PtpReport.ScanTime = (USHORT) PerfCounterDelta;
+	// MS Timestamp is reported in bytes 4-7, maybe use that?
+	PtpReport.ScanTime = (USHORT) ((ULONG) (Buffer + 0x4) * 10);
 
 	// Allocate output memory.
 	Status = WdfRequestRetrieveOutputMemory(
@@ -321,7 +315,7 @@ AmtPtpServiceTouchInputInterrupt(
 		// Fingers
 		for (i = 0; i < raw_n; i++) {
 
-			UCHAR *f_base = Buffer + headerSize + DeviceContext->DeviceInfo->tp_delta;
+			UCHAR *f_base = Buffer + Buffer[2];
 			f = (const struct TRACKPAD_FINGER*) (f_base + i * fingerprintSize);
 
 			// Translate X and Y
@@ -332,11 +326,11 @@ AmtPtpServiceTouchInputInterrupt(
 
 			// Defuzz functions remain the same
 			// TODO: Implement defuzz later
-			PtpReport.Contacts[i].ContactID = (UCHAR) i;
+			PtpReport.Contacts[i].ContactID = f->id;
 			PtpReport.Contacts[i].X = x;
 			PtpReport.Contacts[i].Y = y;
-			PtpReport.Contacts[i].TipSwitch = 0;// (AmtRawToInteger(f->touch_major) << 1) >= 200;
-			PtpReport.Contacts[i].Confidence = 0; // (AmtRawToInteger(f->touch_minor) << 1) > 0;
+			PtpReport.Contacts[i].TipSwitch = (f->state & 0x4) && !(f->state & 0x2);
+			PtpReport.Contacts[i].Confidence = (f->finger != 6 && f->finger != 7);
 
 #ifdef INPUT_CONTENT_TRACE
 			TraceEvents(
@@ -504,11 +498,15 @@ AmtPtpServiceTouchInputInterruptType5(
 			PtpReport.Contacts[i].ContactID = f->id;
 			PtpReport.Contacts[i].X = (USHORT) x;
 			PtpReport.Contacts[i].Y = (USHORT) y;
-			PtpReport.Contacts[i].TipSwitch = (state & 0x4) != 0;
+			// 0x1 = Transition between states
+			// 0x2 = Floating finger?
+			// 0x4 = Valid/Has contacted the touchpad at some point in gesture?
+			// I've gotten 0x6 if I press on the trackpad and then keep my finger close
+			// Note: These values come from my MBP9,2. This logic should work there too
+			PtpReport.Contacts[i].TipSwitch = (state & 0x4) && !(state & 0x2);
 
-			// The Microsoft spec says reject any input larger than 25mm. This is not ideal
-			// for Magic Trackpad 2 - so we raised the threshold a bit higher.
-			// Or maybe I used the wrong unit? IDK
+			// 1 = thumb, 2 = index, etc etc
+			// 6 = palm on MT2, 7 = palm on my MBP9,2?
 			PtpReport.Contacts[i].Confidence = finger != 6;
 
 #ifdef INPUT_CONTENT_TRACE

@@ -77,9 +77,9 @@ enum TRACKPAD_TYPE {
 };
 
 /* Trackpad finger data offsets, le16-aligned */
-#define HEADER_TYPE1		(13 * sizeof(USHORT))
-#define HEADER_TYPE2		(15 * sizeof(USHORT))
-#define HEADER_TYPE3		(19 * sizeof(USHORT))
+#define HEADER_TYPE1		(12 * sizeof(USHORT))
+#define HEADER_TYPE2		(14 * sizeof(USHORT))
+#define HEADER_TYPE3		(18 * sizeof(USHORT))
 #define HEADER_TYPE4		(23 * sizeof(USHORT))
 #define HEADER_TYPE5		( 6 * sizeof(USHORT))
 
@@ -104,7 +104,7 @@ enum TRACKPAD_TYPE {
 #define DELTA_TYPE1		(0 * sizeof(USHORT))
 #define DELTA_TYPE2		(0 * sizeof(USHORT))
 #define DELTA_TYPE3		(0 * sizeof(USHORT))
-#define DELTA_TYPE4		(1 * sizeof(USHORT))
+#define DELTA_TYPE4		(0 * sizeof(USHORT))
 #define DELTA_TYPE5		(0 * sizeof(USHORT))
 
 /* USB control message mode switch data */
@@ -126,7 +126,10 @@ enum TRACKPAD_TYPE {
 
 /* trackpad finger structure, le16-aligned */
 __declspec(align(2)) struct TRACKPAD_FINGER {
-	USHORT origin;		/* zero when switching track finger */
+	UCHAR id;
+	UCHAR state;
+	UCHAR finger;
+	UCHAR unknown;
 	USHORT abs_x;		/* absolute x coodinate */
 	USHORT abs_y;		/* absolute y coodinate */
 	USHORT rel_x;		/* relative x coodinate */
@@ -138,7 +141,6 @@ __declspec(align(2)) struct TRACKPAD_FINGER {
 	USHORT touch_minor;	/* touch area, minor axis */
 	USHORT unused[2];	/* zeros */
 	USHORT pressure;	/* pressure on forcetouch touchpad */
-	USHORT multi;		/* one finger: varies, more fingers: constant */
 };
 
 /* Trackpad finger structure for type5 (magic trackpad), le16-aligned */
