@@ -233,9 +233,6 @@ PtpFilterSelfManagedIoInit(
         goto exit;
     }
 
-    // Stamp last query performance counter
-    KeQueryPerformanceCounter(&deviceContext->LastReportTime);
-
     // Set device state
     deviceContext->DeviceConfigured = TRUE;
 
@@ -271,9 +268,6 @@ PtpFilterSelfManagedIoRestart(
         TraceEvents(TRACE_LEVEL_ERROR, TRACE_DEVICE, "%!FUNC! HID detour should already complete here");
         status = STATUS_INVALID_STATE_TRANSITION;
     }
-
-    // Stamp last query performance counter
-    KeQueryPerformanceCounter(&deviceContext->LastReportTime);
 
     // Set device state
     deviceContext->DeviceConfigured = TRUE;

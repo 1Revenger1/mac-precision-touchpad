@@ -53,7 +53,6 @@ typedef struct _DEVICE_CONTEXT
     BOOLEAN DeviceConfigured;
 
     // PTP report specific
-    LARGE_INTEGER   LastReportTime;
     BOOLEAN         PtpInputOn;
     BOOLEAN         PtpReportTouch;
     BOOLEAN         PtpReportButton;
