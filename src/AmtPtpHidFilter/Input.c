@@ -180,11 +180,11 @@ PtpFilterParsePacket(
 		ptpOutputReport.Contacts[i].ContactID = f->id;
 		ptpOutputReport.Contacts[i].X = (USHORT)x;
 		ptpOutputReport.Contacts[i].Y = (USHORT)y;
-		ptpOutputReport.Contacts[i].TipSwitch = (state & 0x4) != 0;
+		ptpOutputReport.Contacts[i].TipSwitch = (state & 0x4) != 0 && (state & 0x2) == 0;
 		// The Microsoft spec says reject any input larger than 25mm. This is not ideal
 		// for Magic Trackpad 2 - so we raised the threshold a bit higher.
 		// Or maybe I used the wrong unit? IDK
-		ptpOutputReport.Contacts[i].Confidence = finger != 7;
+		ptpOutputReport.Contacts[i].Confidence = finger != 6;
 	}
 
 	status = WdfRequestRetrieveOutputMemory(ptpRequest, &ptpRequestMemory);

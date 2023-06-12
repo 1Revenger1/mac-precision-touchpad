@@ -237,8 +237,6 @@ AmtPtpServiceTouchInputInterrupt(
 	WDFREQUEST Request;
 	WDFMEMORY  RequestMemory;
 	PTP_REPORT PtpReport;
-	LARGE_INTEGER CurrentPerfCounter;
-	LONGLONG PerfCounterDelta;
 
 	const struct TRACKPAD_FINGER *f;
 
@@ -272,13 +270,9 @@ AmtPtpServiceTouchInputInterrupt(
 		goto exit;
 	}
 
-	QueryPerformanceCounter(
-		&CurrentPerfCounter
-	);
-
 	// Scan time is in 100us
 	// MS Timestamp is reported in bytes 4-7, maybe use that?
-	PtpReport.ScanTime = (USHORT) ((ULONG) (Buffer + 0x4) * 10);
+	PtpReport.ScanTime = (USHORT) ((ULONG) *(Buffer + 0x4) * 10);
 
 	// Allocate output memory.
 	Status = WdfRequestRetrieveOutputMemory(
