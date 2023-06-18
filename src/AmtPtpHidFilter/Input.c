@@ -4,6 +4,12 @@
 #include <HidDevice.h>
 #include "Input.tmh"
 
+#define STATUS_PTP_GOOD STATUS_SUCCESS  // Valid input packet
+#define STATUS_PTP_SET_MODE 1           // Enter Multitouch mode again
+#define STATUS_PTP_RESTART 2            // Restart Driver
+#define STATUS_PTP_EXIT 3               // Exit Driver
+#define STATUS_PTP_QUEUE 4              // Requeue worker
+
 VOID
 PtpFilterInputProcessRequest(
 	_In_ WDFDEVICE Device,
@@ -117,8 +123,9 @@ PtpFilterInputIssueTransportRequest(
 	}
 }
 
-static VOID
-PtpFilterParsePacket(
+static
+NTSTATUS
+PtpFilterParseTouchPacket(
 	_In_ PUCHAR buffer,
 	_In_ SIZE_T bufferLength,
 	_In_ PDEVICE_CONTEXT deviceContext
@@ -126,54 +133,65 @@ PtpFilterParsePacket(
 	NTSTATUS status;
 
 	WDFREQUEST ptpRequest;
-	PTP_REPORT ptpOutputReport;
 	WDFMEMORY  ptpRequestMemory;
+	PTP_REPORT* ptpOutputReport;
+	PTP_CONTACT* ptpContact;
 
 	const struct TRACKPAD_REPORT_TYPE5* report;
 	const struct TRACKPAD_FINGER_TYPE5* f;
 	size_t raw_n;
+	size_t memorySize;
 	INT x, y = 0;
 
 	// Pre-flight check: the response size should be sane
 	if (bufferLength < sizeof(struct TRACKPAD_REPORT_TYPE5) || (bufferLength - sizeof(struct TRACKPAD_REPORT_TYPE5)) % sizeof(struct TRACKPAD_FINGER_TYPE5) != 0) {
-		TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_INPUT, "%!FUNC! Malformed input received. Length = %llu. Attempt to reconfigure the device.", bufferLength);
-		//WdfTimerStart(deviceContext->HidTransportRecoveryTimer, WDF_REL_TIMEOUT_IN_SEC(3));
-		return;
+		TraceEvents(TRACE_LEVEL_ERROR, TRACE_INPUT, "%!FUNC! Malformed input received. Length = %llu", bufferLength);
+		return STATUS_PTP_GOOD;
 	}
 
 	report = (struct TRACKPAD_REPORT_TYPE5*)buffer;
-	if (report->reportId != 0x31) {
-		TraceEvents(TRACE_LEVEL_ERROR, TRACE_INPUT, "%!FUNC! Incorrect report id %x", buffer[0]);
-		return;
-	}
 
 	// Read report and fulfill PTP request. If no report is found, just exit.
 	status = WdfIoQueueRetrieveNextRequest(deviceContext->HidReadQueue, &ptpRequest);
 	if (!NT_SUCCESS(status)) {
 		TraceEvents(TRACE_LEVEL_ERROR, TRACE_INPUT, "%!FUNC! WdfIoQueueRetrieveNextRequest failed with %!STATUS!", status);
-		return;
+		return STATUS_PTP_GOOD;
+	}
+
+	status = WdfRequestRetrieveOutputMemory(ptpRequest, &ptpRequestMemory);
+	if (!NT_SUCCESS(status))
+	{
+		TraceEvents(TRACE_LEVEL_ERROR, TRACE_INPUT, "%!FUNC! WdfRequestRetrieveOutputBuffer failed with %!STATUS!", status);
+		return STATUS_PTP_RESTART;
+	}
+
+	ptpOutputReport = WdfMemoryGetBuffer(ptpRequestMemory, &memorySize);
+	if (memorySize != sizeof(PTP_REPORT)) {
+		TraceEvents(TRACE_LEVEL_ERROR, TRACE_INPUT, "%!FUNC! WdfMemoryGetBuffer failed with incorrect size!");
+		return STATUS_PTP_EXIT;
 	}
 
 	// Report header
-	ptpOutputReport.ReportID = REPORTID_MULTITOUCH;
-	ptpOutputReport.IsButtonClicked = report->clicks;
-	ptpOutputReport.ScanTime = (report->timestampLow | (report->timestampHigh << 5)) * 10;
+	ptpOutputReport->ReportID = REPORTID_MULTITOUCH;
+	ptpOutputReport->IsButtonClicked = report->clicks;
+	ptpOutputReport->ScanTime = (report->timestampLow | (report->timestampHigh << 5)) * 10;
 
 	// Report fingers
 	raw_n = (bufferLength - sizeof(struct TRACKPAD_REPORT_TYPE5)) / sizeof(struct TRACKPAD_FINGER_TYPE5);
 	if (raw_n >= PTP_MAX_CONTACT_POINTS) raw_n = PTP_MAX_CONTACT_POINTS;
-	ptpOutputReport.ContactCount = (UCHAR)raw_n;
+	ptpOutputReport->ContactCount = (UCHAR)raw_n;
 
 	TraceEvents(
 		TRACE_LEVEL_INFORMATION,
 		TRACE_INPUT,
 		"%!FUNC!: New report at %d ms with %d fingers =========",
-		ptpOutputReport.ScanTime / 10,
+		ptpOutputReport->ScanTime / 10,
 		(UCHAR) raw_n
 	);
 
 	for (size_t i = 0; i < raw_n; i++) {
 		f = &report->fingers[i];
+		ptpContact = &ptpOutputReport->Contacts[i];
 
 		USHORT tmp_x = f->coords & 0x1fff;
 		USHORT tmp_y = (f->coords >> 13) & 0x1fff;
@@ -186,26 +204,26 @@ PtpFilterParsePacket(
 		x = (x - deviceContext->X.min) > 0 ? (x - deviceContext->X.min) : 0;
 		y = (y - deviceContext->Y.min) > 0 ? (y - deviceContext->Y.min) : 0;
 
-		ptpOutputReport.Contacts[i].ContactID = f->id;
-		ptpOutputReport.Contacts[i].X = (USHORT)x;
-		ptpOutputReport.Contacts[i].Y = (USHORT)y;
-		ptpOutputReport.Contacts[i].TipSwitch = (state & 0x4) != 0 && (state & 0x2) == 0;
+		ptpContact->ContactID = f->id;
+		ptpContact->X = (USHORT)x;
+		ptpContact->Y = (USHORT)y;
+		ptpContact->TipSwitch = (state & 0x4) != 0 && (state & 0x2) == 0;
 		// The Microsoft spec says reject any input larger than 25mm. This is not ideal
 		// for Magic Trackpad 2 - so we raised the threshold a bit higher.
 		// Or maybe I used the wrong unit? IDK
-		ptpOutputReport.Contacts[i].Confidence = finger != 6;
+		ptpContact->Confidence = finger != 6;
 		
 		TraceEvents(
 			TRACE_LEVEL_INFORMATION,
 			TRACE_INPUT,
 			"%!FUNC!: Point %llu, X = %d, Y = %d, Pres: %d, Size: %d, TipSwitch = %d, Confidence = %d, tMajor = %d, tMinor = %d, id = %d, finger = %d, state = %d",
 			i,
-			ptpOutputReport.Contacts[i].X,
-			ptpOutputReport.Contacts[i].Y,
+			ptpContact->X,
+			ptpContact->Y,
 			f->pressure,
 			f->size,
-			ptpOutputReport.Contacts[i].TipSwitch,
-			ptpOutputReport.Contacts[i].Confidence,
+			ptpContact->TipSwitch,
+			ptpContact->Confidence,
 			f->touchMajor,
 			f->touchMinor,
 			f->id,
@@ -214,24 +232,69 @@ PtpFilterParsePacket(
 		);
 	}
 
-	status = WdfRequestRetrieveOutputMemory(ptpRequest, &ptpRequestMemory);
-	if (!NT_SUCCESS(status))
-	{
-		TraceEvents(TRACE_LEVEL_ERROR, TRACE_INPUT, "%!FUNC! WdfRequestRetrieveOutputBuffer failed with %!STATUS!", status);
-		WdfDeviceSetFailed(deviceContext->Device, WdfDeviceFailedAttemptRestart);
-		return;
-	}
-
-	status = WdfMemoryCopyFromBuffer(ptpRequestMemory, 0, (PVOID) &ptpOutputReport, sizeof(PTP_REPORT));
-	if (!NT_SUCCESS(status))
-	{
-		TraceEvents(TRACE_LEVEL_ERROR, TRACE_INPUT, "%!FUNC! WdfMemoryCopyFromBuffer failed with %!STATUS!", status);
-		WdfDeviceSetFailed(deviceContext->Device, WdfDeviceFailedAttemptRestart);
-		return;
-	}
-
 	WdfRequestSetInformation(ptpRequest, sizeof(PTP_REPORT));
 	WdfRequestComplete(ptpRequest, status);
+	return STATUS_PTP_GOOD;
+}
+
+static
+NTSTATUS
+PtpFilterParsePacket(
+	_In_ PUCHAR buffer,
+	_In_ SIZE_T bufferLength,
+	_In_ PDEVICE_CONTEXT deviceContext
+)
+{
+	size_t pkt1Size, pkt2Size;
+	NTSTATUS status;
+
+	if (bufferLength == 0) {
+		return STATUS_PTP_QUEUE;
+	}
+
+	switch (buffer[0]) {
+	case 0x02:
+		// TODO: USB does combine Mouse and Wellspring report into one packet, unlike BT. Maybe also check report length here?
+		TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_INPUT, "%!FUNC! Mouse Packet - Setting Wellspring mode");
+		return STATUS_PTP_SET_MODE;
+	case 0x13:
+		// Byte 2 = 0x83
+		TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_INPUT, "%!FUNC! Powered down (0x%x 0x%x)", buffer[1], buffer[2]);
+		return STATUS_PTP_QUEUE; // Wait for next packet
+	case 0x31:
+		return PtpFilterParseTouchPacket(buffer, bufferLength, deviceContext);
+	case 0x90:
+		TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_INPUT, "%!FUNC! Battery Percentage = %d", buffer[2]);
+		return STATUS_PTP_SET_MODE; // Sometimes sent when the trackpad is powered on
+	case 0xF7:
+		pkt1Size = buffer[1];
+		pkt2Size = bufferLength - 2 - pkt1Size;
+		status = PtpFilterParsePacket(buffer + 2, pkt1Size, deviceContext);
+		if (status == STATUS_PTP_EXIT || status == STATUS_PTP_RESTART) {
+			return status;
+		}
+		return PtpFilterParsePacket(buffer + 2 + pkt1Size, pkt2Size, deviceContext);
+	case 0xFE:
+		// First part of split packet
+		// TODO: Combine with pt2 and parse
+		TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_INPUT, "%!FUNC! Split Packet pt1");
+		return STATUS_PTP_QUEUE;
+	case 0xFC:
+		// Second part of split packet
+		TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_INPUT, "%!FUNC! Split Packet pt2");
+		return STATUS_PTP_QUEUE;
+
+		// Unknown reports!
+	case 0x1C:
+		// This seemed to kind of happen randomly
+		// Only 4 bytes long
+		TraceEvents(TRACE_LEVEL_WARNING, TRACE_INPUT, "%!FUNC! Unknown Packet with bytes %x %x %x", buffer[1], buffer[2], buffer[3]);
+	default:
+		TraceEvents(TRACE_LEVEL_ERROR, TRACE_INPUT, "%!FUNC! Invalid Report ID %x from MT2 with length %d!", buffer[0], (int)bufferLength);
+		TraceEvents(TRACE_LEVEL_ERROR, TRACE_INPUT, "%!FUNC! First few bytes: %x %x %x %x", buffer[1], buffer[2], buffer[3], buffer[4]);
+		// Ignore and wait for next packet
+		return STATUS_PTP_QUEUE;
+	};
 }
 
 VOID
@@ -242,10 +305,11 @@ PtpFilterInputRequestCompletionCallback(
 	_In_ WDFCONTEXT Context
 )
 {
+	NTSTATUS status;
 	PWORKER_REQUEST_CONTEXT requestContext;
 	PDEVICE_CONTEXT deviceContext;
 
-	size_t responseLength, pkt1Size, pkt2Size;
+	size_t responseLength;
 	PUCHAR responseBuffer;
 
 	UNREFERENCED_PARAMETER(Target);
@@ -262,38 +326,20 @@ PtpFilterInputRequestCompletionCallback(
 		goto cleanup;
 	}
 
-	// Pre-flight check: if size is 0, this is not something we need. Ignore the read, and issue next request.
-	if (responseLength <= 0) {
-		WdfWorkItemEnqueue(requestContext->DeviceContext->HidTransportRecoveryWorkItem);
-		goto cleanup;
+	status = PtpFilterParsePacket(responseBuffer, responseLength, deviceContext);
+	if (status == STATUS_PTP_EXIT) {
+		WdfDeviceSetFailed(deviceContext->Device, WdfDeviceFailedNoRestart);
+	}
+	else if (status == STATUS_PTP_RESTART) {
+		WdfDeviceSetFailed(deviceContext->Device, WdfDeviceFailedAttemptRestart);
+	}
+	else if (status == STATUS_PTP_QUEUE) {
+		WdfWorkItemEnqueue(deviceContext->HidTransportRecoveryWorkItem);
+	}
+	else if (status == STATUS_PTP_SET_MODE) {
+		WdfTimerStart(deviceContext->HidTransportRecoveryTimer, WDF_REL_TIMEOUT_IN_SEC(3));
 	}
 
-	switch (responseBuffer[0]) {
-
-	// Check the report ID. Sometimes two reports can be sent within a packet
-	case 0xF7:
-		pkt1Size = responseBuffer[1];
-		pkt2Size = responseLength - 2 - pkt1Size;
-		PtpFilterParsePacket(responseBuffer + 2, pkt1Size, deviceContext);
-		PtpFilterParsePacket(responseBuffer + 2 + pkt1Size, pkt2Size, deviceContext);
-		break;
-	case 0x31:
-		PtpFilterParsePacket(responseBuffer, responseLength, deviceContext);
-		break;
-	case 0x90:
-		// Report id 0x13 when powered off, 0x90 when powered up?
-		// Byte 2 = 0x83 on shutdown, 0x64 on startup
-		TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_INPUT, "%!FUNC! Powered on?? (%x %x)", responseBuffer[1], responseBuffer[2]);
-		WdfTimerStart(deviceContext->HidTransportRecoveryTimer, WDF_REL_TIMEOUT_IN_MS(250));
-		break;
-	case 0x13:
-		TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_INPUT, "%!FUNC! Powered down?? (%x %x)", responseBuffer[1], responseBuffer[2]);
-		break;
-	default:
-		TraceEvents(TRACE_LEVEL_ERROR, TRACE_INPUT, "%!FUNC! Invalid Report ID %x from MT2 with length %d!", responseBuffer[0], (int)responseLength);
-		TraceEvents(TRACE_LEVEL_ERROR, TRACE_INPUT, "%!FUNC! First few bytes: %x %x %x %x", responseBuffer[1], responseBuffer[2], responseBuffer[3], responseBuffer[4]);
-		break;
-	}
 
 cleanup:
 	// Cleanup
