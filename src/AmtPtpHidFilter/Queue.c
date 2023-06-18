@@ -63,7 +63,6 @@ FilterEvtIoIntDeviceControl(
 )
 {
     PQUEUE_CONTEXT queueContext;
-    PDEVICE_CONTEXT deviceContext;
     BOOLEAN requestPending = FALSE;
 	NTSTATUS status = STATUS_UNSUCCESSFUL;
     
@@ -71,7 +70,6 @@ FilterEvtIoIntDeviceControl(
     UNREFERENCED_PARAMETER(OutputBufferLength);
 
     queueContext = PtpFilterQueueGetContext(Queue);
-    deviceContext = PtpFilterGetContext(queueContext->Device);
 
 	switch (IoControlCode)
 	{
