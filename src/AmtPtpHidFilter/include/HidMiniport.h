@@ -34,8 +34,7 @@ typedef struct _PTP_DEVICE_SELECTIVE_REPORT_MODE_REPORT {
 typedef struct _PTP_CONTACT {
 	UCHAR		Confidence : 1;
 	UCHAR		TipSwitch : 1;
-	UCHAR		Padding : 6;
-	ULONG		ContactID;
+	UCHAR		ContactID : 6;
 	USHORT		X;
 	USHORT		Y;
 } PTP_CONTACT, * PPTP_CONTACT;
@@ -43,7 +42,7 @@ typedef struct _PTP_CONTACT {
 // PTP single scan frame Input Report
 typedef struct _PTP_REPORT {
 	UCHAR       ReportID;
-	PTP_CONTACT Contacts[5];
+	PTP_CONTACT Contacts[PTP_MAX_CONTACT_POINTS];
 	USHORT      ScanTime;
 	UCHAR       ContactCount;
 	UCHAR       IsButtonClicked;
