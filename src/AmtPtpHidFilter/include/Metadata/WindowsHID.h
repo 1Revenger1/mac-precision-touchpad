@@ -53,6 +53,19 @@
 		END_COLLECTION, /* End Collection */ \
 	END_COLLECTION /* End Collection */
 
+#define AAPL_PTP_WINDOWS_HAPTICS_CONFIGURATION_COLLECTION \
+	USAGE_PAGE, 0x0E, /* Usage Page: Haptics */ \
+	USAGE, 0x01, /* Usage: Simple Haptics Controller */ \
+	BEGIN_COLLECTION, 0x02, /* Collection: Logical */ \
+		USAGE, 0x23, /* Usage: Intensity */ \
+		REPORT_ID, REPORTID_HAPTICS, /* Report ID: Haptics Feedback */ \
+		LOGICAL_MINIMUM, 0x00, /* Logical Minimum: 0 */ \
+		LOGICAL_MAXIMUM, 0x64, /* Logical Maximum: 100 */ \
+		REPORT_SIZE, 0x08, /* Report Size: 8 */ \
+		REPORT_COUNT, 0x01, /* Report Count: 1 */ \
+        FEATURE, 0x02, /* Feature: (Data, Var, Abs) */ \
+	END_COLLECTION,                             //   End Collection ()
+
 #define DEFAULT_PTP_HQA_BLOB \
 	0xfc, 0x28, 0xfe, 0x84, 0x40, 0xcb, 0x9a, 0x87, \
 	0x0d, 0xbe, 0x57, 0x3c, 0xb6, 0x70, 0x09, 0x88, \

@@ -48,6 +48,12 @@ typedef struct _PTP_REPORT {
 	UCHAR       IsButtonClicked;
 } PTP_REPORT, * PPTP_REPORT;
 
+// PTP Haptic Feedback Report
+typedef struct _PTP_DEVICE_HAPTIC_FEEDBACK_CONFIG {
+	UCHAR ReportID;
+	UCHAR FeedbackPercent;
+} PTP_DEVICE_HAPTIC_FEEDBACK_CONFIG, * PPTP_DEVICE_HAPTIC_FEEDBACK_CONFIG;
+
 #include <poppack.h>
 
 // HID routines
