@@ -137,19 +137,19 @@ PtpFilterParseTouchPacket(
 	PTP_REPORT* ptpOutputReport;
 	PTP_CONTACT* ptpContact;
 
-	const TRACKPAD_REPORT_TYPE5* report;
-	const TRACKPAD_FINGER_TYPE5* f;
+	const TRACKPAD_REPORT_MT2* report;
+	const TRACKPAD_FINGER_MT2* f;
 	size_t raw_n;
 	size_t memorySize;
 	INT x, y = 0;
 
 	// Pre-flight check: the response size should be sane
-	if (bufferLength < sizeof(TRACKPAD_REPORT_TYPE5) || (bufferLength - sizeof(TRACKPAD_REPORT_TYPE5)) % sizeof(TRACKPAD_FINGER_TYPE5) != 0) {
+	if (bufferLength < sizeof(TRACKPAD_REPORT_MT2) || (bufferLength - sizeof(TRACKPAD_REPORT_MT2)) % sizeof(TRACKPAD_FINGER_MT2) != 0) {
 		TraceEvents(TRACE_LEVEL_ERROR, TRACE_INPUT, "%!FUNC! Malformed input received. Length = %llu", bufferLength);
 		return STATUS_PTP_GOOD;
 	}
 
-	report = (const TRACKPAD_REPORT_TYPE5*)buffer;
+	report = (const TRACKPAD_REPORT_MT2*)buffer;
 
 	// Read report and fulfill PTP request. If no report is found, just exit.
 	status = WdfIoQueueRetrieveNextRequest(deviceContext->HidReadQueue, &ptpRequest);
@@ -177,7 +177,7 @@ PtpFilterParseTouchPacket(
 	ptpOutputReport->ScanTime = (report->timestampLow | (report->timestampHigh << 5)) * 10;
 
 	// Report fingers
-	raw_n = (bufferLength - sizeof(TRACKPAD_REPORT_TYPE5)) / sizeof(TRACKPAD_FINGER_TYPE5);
+	raw_n = (bufferLength - sizeof(TRACKPAD_REPORT_MT2)) / sizeof(TRACKPAD_FINGER_MT2);
 	if (raw_n >= PTP_MAX_CONTACT_POINTS) raw_n = PTP_MAX_CONTACT_POINTS;
 	ptpOutputReport->ContactCount = (UCHAR)raw_n;
 
