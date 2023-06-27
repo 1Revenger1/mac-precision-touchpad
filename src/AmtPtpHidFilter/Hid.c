@@ -248,6 +248,23 @@ PtpFilterGetHidFeatures(
 		TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_HID, "%!FUNC! Report REPORTID_PTPHQA is fulfilled");
 		break;
 	}
+	case REPORTID_HAPTICS:
+	{
+		// Size sanity check
+		reportSize = sizeof(PTP_DEVICE_HAPTIC_FEEDBACK_CONFIG);
+		if (hidContent->reportBufferLen < reportSize)
+		{
+			status = STATUS_INVALID_BUFFER_SIZE;
+			TraceEvents(TRACE_LEVEL_ERROR, TRACE_HID, "%!FUNC! Report buffer is too small.");
+			goto exit;
+		}
+
+		TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_HID, "%!FUNC! Report REPORTID_HAPTICS requested");
+		PPTP_DEVICE_HAPTIC_FEEDBACK_CONFIG InputHaptics = (PPTP_DEVICE_HAPTIC_FEEDBACK_CONFIG)hidContent->reportBuffer;
+		InputHaptics->ReportID = REPORTID_HAPTICS;
+		InputHaptics->FeedbackPercent = 50;
+		break;
+	}
 	default:
 	{
 		TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_HID, "%!FUNC! Unsupported type %d is requested", hidContent->reportId);
@@ -329,6 +346,13 @@ PtpFilterSetHidFeatures(
 		TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_HID, "%!FUNC! Report REPORTID_FUNCSWITCH requested Button = %d, Surface = %d",
 			InputSelection->ButtonReport, InputSelection->SurfaceReport);
 		TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_HID, "%!FUNC! Report REPORTID_FUNCSWITCH is fulfilled");
+		break;
+	}
+	case REPORTID_HAPTICS:
+	{
+		TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_HID, "%!FUNC! Report REPORTID_HAPTICS requested");
+		PPTP_DEVICE_HAPTIC_FEEDBACK_CONFIG InputHaptics = (PPTP_DEVICE_HAPTIC_FEEDBACK_CONFIG)hidPacket->reportBuffer;
+		TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_HID, "%!FUNC! Haptics = %d", InputHaptics->FeedbackPercent);
 		break;
 	}
 	default:

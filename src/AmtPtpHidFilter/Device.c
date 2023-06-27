@@ -277,6 +277,87 @@ exit:
     return status;
 }
 
+static UCHAR mt2_bt_wellspring_mode[] = { 0xF1, 0x02, 0x01 };
+static UCHAR mt2_usb_wellspring_mode[] = { 0x2, 0x1 };
+static UCHAR hostMode[] = { 0xF2, 0x21, 0x0 };
+static UCHAR reportDown[] = { 0x22, 0x01, 0x15, 0x78, 0x02, 0x00, 0x24, 0x30, 0x06, 0x01, 0x00, 0x18, 0x48, 0x13 };
+static UCHAR reportUp[] = { 0x23, 0x01, 0x10, 0x78, 0x02, 0x00, 0x24, 0x30, 0x06, 0x01, 0x00, 0x18, 0x48, 0x13 };
+
+static
+NTSTATUS
+PtpFilterSetFeature(
+    _In_ PDEVICE_CONTEXT deviceContext,
+    _In_ PUCHAR buffer,
+    _In_ size_t bufferSize
+)
+{
+    NTSTATUS status;
+    PHID_XFER_PACKET pHidPacket;
+    WDFMEMORY hidMemory;
+    WDF_OBJECT_ATTRIBUTES attributes;
+    WDF_REQUEST_SEND_OPTIONS configRequestSendOptions;
+    WDFREQUEST configRequest;   
+    PIRP pConfigIrp = NULL;
+
+    // Init a request entity.
+    // Because we bypassed HIDCLASS driver, there's a few things that we need to manually take care of.
+    status = WdfRequestCreate(WDF_NO_OBJECT_ATTRIBUTES, deviceContext->HidIoTarget, &configRequest);
+    if (!NT_SUCCESS(status)) {
+        TraceEvents(TRACE_LEVEL_ERROR, TRACE_DEVICE, "%!FUNC! WdfRequestCreate failed, Status = %!STATUS!", status);
+        return status;
+    }
+
+    // Initialize HID_XFER_REQUEST
+    WDF_OBJECT_ATTRIBUTES_INIT(&attributes);
+    attributes.ParentObject = configRequest;
+    status = WdfMemoryCreate(&attributes, NonPagedPool, 0, sizeof(HID_XFER_PACKET) + bufferSize, &hidMemory, &pHidPacket);
+    if (!NT_SUCCESS(status)) {
+        TraceEvents(TRACE_LEVEL_ERROR, TRACE_DEVICE, "%!FUNC! WdfMemoryCreatePreallocated failed, Status = %!STATUS!", status);
+        goto cleanup;
+    }
+
+    pHidPacket->reportId = buffer[0];
+    pHidPacket->reportBuffer = (PUCHAR) pHidPacket + sizeof(HID_XFER_PACKET);
+    pHidPacket->reportBufferLen = (ULONG) bufferSize;
+    memcpy(pHidPacket->reportBuffer, buffer, bufferSize);
+
+    status = WdfIoTargetFormatRequestForInternalIoctl(deviceContext->HidIoTarget,
+        configRequest, IOCTL_HID_SET_FEATURE,
+        hidMemory, NULL, NULL, NULL);
+    if (!NT_SUCCESS(status)) {
+        TraceEvents(TRACE_LEVEL_ERROR, TRACE_DEVICE, "%!FUNC! WdfIoTargetFormatRequestForInternalIoctl failed, Status = %!STATUS!", status);
+        goto cleanup;
+    }
+
+    // Manually take care of IRP to meet requirements of mini drivers.
+    pConfigIrp = WdfRequestWdmGetIrp(configRequest);
+    if (pConfigIrp == NULL) {
+        TraceEvents(TRACE_LEVEL_ERROR, TRACE_DEVICE, "%!FUNC! WdfRequestWdmGetIrp failed");
+        status = STATUS_UNSUCCESSFUL;
+        goto cleanup;
+    }
+
+    // God-damn-it we have to configure it by ourselves :)
+    pConfigIrp->UserBuffer = pHidPacket;
+
+    WDF_REQUEST_SEND_OPTIONS_INIT(&configRequestSendOptions, WDF_REQUEST_SEND_OPTION_SYNCHRONOUS);
+    if (WdfRequestSend(configRequest, deviceContext->HidIoTarget, &configRequestSendOptions) == FALSE) {
+        status = WdfRequestGetStatus(configRequest);
+        TraceEvents(TRACE_LEVEL_ERROR, TRACE_DEVICE, "%!FUNC! WdfRequestSend failed, Status = %!STATUS!", status);
+    }
+    else {
+        TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_DEVICE, "%!FUNC! Changed trackpad status to multitouch mode");
+        status = STATUS_SUCCESS;
+    }
+
+cleanup:
+    if (configRequest != NULL) {
+        WdfObjectDelete(configRequest);
+    }
+
+    return status;
+}
+
 NTSTATUS
 PtpFilterConfigureMultiTouch(
     _In_ WDFDEVICE Device
@@ -284,14 +365,8 @@ PtpFilterConfigureMultiTouch(
 {
     NTSTATUS status = STATUS_SUCCESS;
     PDEVICE_CONTEXT deviceContext;
-
-    UCHAR hidPacketBuffer[HID_XFER_PACKET_SIZE];
-    PHID_XFER_PACKET pHidPacket;
-    WDFMEMORY hidMemory;
-    WDF_OBJECT_ATTRIBUTES attributes;
-    WDF_REQUEST_SEND_OPTIONS configRequestSendOptions;
-    WDFREQUEST configRequest;
-    PIRP pConfigIrp = NULL;
+    PUCHAR buffer = NULL;
+    size_t bufferLength;
 
     PAGED_CODE();
     TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_DEVICE, "%!FUNC! Entry");
@@ -310,9 +385,6 @@ PtpFilterConfigureMultiTouch(
         goto exit;
     }
 
-    RtlZeroMemory(hidPacketBuffer, sizeof(hidPacketBuffer));
-    pHidPacket = (PHID_XFER_PACKET) &hidPacketBuffer;
-
     if (deviceContext->VendorID == HID_VID_APPLE_USB) {
         deviceContext->InputFingerSize = FSIZE_TYPE5;
         deviceContext->InputHeaderSize = HOFFSET_TYPE_USB_5;
@@ -326,13 +398,8 @@ PtpFilterConfigureMultiTouch(
         deviceContext->Y.min = -2479;
         deviceContext->Y.max = 2586;
 
-        pHidPacket->reportId = 0x02;
-        pHidPacket->reportBufferLen = 0x04;
-        pHidPacket->reportBuffer = (PUCHAR)pHidPacket + sizeof(HID_XFER_PACKET);
-        pHidPacket->reportBuffer[0] = 0x02;
-        pHidPacket->reportBuffer[1] = 0x01;
-        pHidPacket->reportBuffer[2] = 0x00;
-        pHidPacket->reportBuffer[3] = 0x00;
+        buffer = mt2_usb_wellspring_mode;
+        bufferLength = sizeof(mt2_usb_wellspring_mode);
     }
     else if (deviceContext->VendorID == HID_VID_APPLE_BT) {
         deviceContext->InputFingerSize = FSIZE_TYPE5;
@@ -347,12 +414,8 @@ PtpFilterConfigureMultiTouch(
         deviceContext->Y.min = -2479;
         deviceContext->Y.max = 2586;
 
-        pHidPacket->reportId = 0xF1;
-        pHidPacket->reportBufferLen = 0x03;
-        pHidPacket->reportBuffer = (PUCHAR)pHidPacket + sizeof(HID_XFER_PACKET);
-        pHidPacket->reportBuffer[0] = 0xF1;
-        pHidPacket->reportBuffer[1] = 0x02;
-        pHidPacket->reportBuffer[2] = 0x01;
+        buffer = mt2_bt_wellspring_mode;
+        bufferLength = sizeof(mt2_bt_wellspring_mode);
     }
     else {
         // Something we don't support yet.
@@ -361,55 +424,22 @@ PtpFilterConfigureMultiTouch(
         goto exit;
     }
 
-    // Init a request entity.
-    // Because we bypassed HIDCLASS driver, there's a few things that we need to manually take care of.
-    status = WdfRequestCreate(WDF_NO_OBJECT_ATTRIBUTES, deviceContext->HidIoTarget, &configRequest);
-    if (!NT_SUCCESS(status)) {
-        TraceEvents(TRACE_LEVEL_ERROR, TRACE_DEVICE, "%!FUNC! WdfRequestCreate failed, Status = %!STATUS!", status);
-        goto exit;
-    }
+    status = PtpFilterSetFeature(
+        deviceContext, buffer, bufferLength
+    );
 
-    WDF_OBJECT_ATTRIBUTES_INIT(&attributes);
-    attributes.ParentObject = configRequest;
-    status = WdfMemoryCreatePreallocated(&attributes, (PVOID) pHidPacket, HID_XFER_PACKET_SIZE, &hidMemory);
-    if (!NT_SUCCESS(status)) {
-        TraceEvents(TRACE_LEVEL_ERROR, TRACE_DEVICE, "%!FUNC! WdfMemoryCreatePreallocated failed, Status = %!STATUS!", status);
-        goto cleanup;
-    }
+    //status = PtpFilterSetFeature(
+    //    deviceContext, hostMode, sizeof(hostMode)
+    //);
 
-    status = WdfIoTargetFormatRequestForInternalIoctl(deviceContext->HidIoTarget,
-        configRequest, IOCTL_HID_SET_FEATURE,
-        hidMemory, NULL, NULL, NULL);
-    if (!NT_SUCCESS(status)) {
-        TraceEvents(TRACE_LEVEL_ERROR, TRACE_DEVICE, "%!FUNC! WdfIoTargetFormatRequestForInternalIoctl failed, Status = %!STATUS!", status);
-        goto cleanup;
-    }
-    
-    // Manually take care of IRP to meet requirements of mini drivers.
-    pConfigIrp = WdfRequestWdmGetIrp(configRequest);
-    if (pConfigIrp == NULL) {
-        TraceEvents(TRACE_LEVEL_ERROR, TRACE_DEVICE, "%!FUNC! WdfRequestWdmGetIrp failed");
-        status = STATUS_UNSUCCESSFUL;
-        goto cleanup;
-    }
+    //status = PtpFilterSetFeature(
+    //    deviceContext, reportDown, sizeof(reportDown)
+    //);
 
-    // God-damn-it we have to configure it by ourselves :)
-    pConfigIrp->UserBuffer = pHidPacket;
+    //status = PtpFilterSetFeature(
+    //    deviceContext, reportUp, sizeof(reportUp)
+    //);
 
-    WDF_REQUEST_SEND_OPTIONS_INIT(&configRequestSendOptions, WDF_REQUEST_SEND_OPTION_SYNCHRONOUS);
-    if (WdfRequestSend(configRequest, deviceContext->HidIoTarget, &configRequestSendOptions) == FALSE) {
-        status = WdfRequestGetStatus(configRequest);
-        TraceEvents(TRACE_LEVEL_ERROR, TRACE_DEVICE, "%!FUNC! WdfRequestSend failed, Status = %!STATUS!", status);
-        goto cleanup;
-    } else {
-        TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_DEVICE, "%!FUNC! Changed trackpad status to multitouch mode");
-        status = STATUS_SUCCESS;
-    }
-
-cleanup:
-    if (configRequest != NULL) {
-        WdfObjectDelete(configRequest);
-    }
 exit:
     TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_DEVICE, "%!FUNC! Exit, Status = %!STATUS!", status);
     return status;
