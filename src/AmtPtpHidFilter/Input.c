@@ -137,19 +137,19 @@ PtpFilterParseTouchPacket(
 	PTP_REPORT* ptpOutputReport;
 	PTP_CONTACT* ptpContact;
 
-	const struct TRACKPAD_REPORT_TYPE5* report;
-	const struct TRACKPAD_FINGER_TYPE5* f;
+	const TRACKPAD_REPORT_TYPE5* report;
+	const TRACKPAD_FINGER_TYPE5* f;
 	size_t raw_n;
 	size_t memorySize;
 	INT x, y = 0;
 
 	// Pre-flight check: the response size should be sane
-	if (bufferLength < sizeof(struct TRACKPAD_REPORT_TYPE5) || (bufferLength - sizeof(struct TRACKPAD_REPORT_TYPE5)) % sizeof(struct TRACKPAD_FINGER_TYPE5) != 0) {
+	if (bufferLength < sizeof(TRACKPAD_REPORT_TYPE5) || (bufferLength - sizeof(TRACKPAD_REPORT_TYPE5)) % sizeof(TRACKPAD_FINGER_TYPE5) != 0) {
 		TraceEvents(TRACE_LEVEL_ERROR, TRACE_INPUT, "%!FUNC! Malformed input received. Length = %llu", bufferLength);
 		return STATUS_PTP_GOOD;
 	}
 
-	report = (struct TRACKPAD_REPORT_TYPE5*)buffer;
+	report = (const TRACKPAD_REPORT_TYPE5*)buffer;
 
 	// Read report and fulfill PTP request. If no report is found, just exit.
 	status = WdfIoQueueRetrieveNextRequest(deviceContext->HidReadQueue, &ptpRequest);
@@ -177,12 +177,12 @@ PtpFilterParseTouchPacket(
 	ptpOutputReport->ScanTime = (report->timestampLow | (report->timestampHigh << 5)) * 10;
 
 	// Report fingers
-	raw_n = (bufferLength - sizeof(struct TRACKPAD_REPORT_TYPE5)) / sizeof(struct TRACKPAD_FINGER_TYPE5);
+	raw_n = (bufferLength - sizeof(TRACKPAD_REPORT_TYPE5)) / sizeof(TRACKPAD_FINGER_TYPE5);
 	if (raw_n >= PTP_MAX_CONTACT_POINTS) raw_n = PTP_MAX_CONTACT_POINTS;
 	ptpOutputReport->ContactCount = (UCHAR)raw_n;
 
 	TraceEvents(
-		TRACE_LEVEL_INFORMATION,
+		TRACE_LEVEL_VERBOSE,
 		TRACE_INPUT,
 		"%!FUNC!: New report at %d ms with %d fingers =========",
 		ptpOutputReport->ScanTime / 10,
@@ -214,7 +214,7 @@ PtpFilterParseTouchPacket(
 		ptpContact->Confidence = finger != 6;
 		
 		TraceEvents(
-			TRACE_LEVEL_INFORMATION,
+			TRACE_LEVEL_VERBOSE,
 			TRACE_INPUT,
 			"%!FUNC!: Point %llu, X = %d, Y = %d, Pres: %d, Size: %d, TipSwitch = %d, Confidence = %d, tMajor = %d, tMinor = %d, id = %d, finger = %d, state = %d",
 			i,
@@ -254,9 +254,13 @@ PtpFilterParsePacket(
 
 	switch (buffer[0]) {
 	case 0x02:
-		// TODO: USB does combine Mouse and Wellspring report into one packet, unlike BT. Maybe also check report length here?
-		TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_INPUT, "%!FUNC! Mouse Packet - Setting Wellspring mode");
-		return STATUS_PTP_SET_MODE;
+		if (bufferLength > sizeof(TRACKPAD_MOUSE_REPORT)) {
+			return PtpFilterParsePacket(buffer + sizeof(TRACKPAD_MOUSE_REPORT), bufferLength - sizeof(TRACKPAD_MOUSE_REPORT), deviceContext);
+		}
+		else {
+			TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_INPUT, "%!FUNC! Mouse Packet - Setting Wellspring mode");
+			return STATUS_PTP_SET_MODE;
+		}
 	case 0x13:
 		// Byte 2 = 0x83
 		TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_INPUT, "%!FUNC! Powered down (0x%x 0x%x)", buffer[1], buffer[2]);
@@ -274,12 +278,12 @@ PtpFilterParsePacket(
 			return status;
 		}
 		return PtpFilterParsePacket(buffer + 2 + pkt1Size, pkt2Size, deviceContext);
-	case 0xFE:
+	case 0xFC:
 		// First part of split packet
 		// TODO: Combine with pt2 and parse
 		TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_INPUT, "%!FUNC! Split Packet pt1");
 		return STATUS_PTP_QUEUE;
-	case 0xFC:
+	case 0xFE:
 		// Second part of split packet
 		TraceEvents(TRACE_LEVEL_INFORMATION, TRACE_INPUT, "%!FUNC! Split Packet pt2");
 		return STATUS_PTP_QUEUE;

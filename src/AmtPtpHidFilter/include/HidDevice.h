@@ -41,7 +41,16 @@
 #pragma warning( push )
 #pragma warning( disable : 4200 )
 
-struct TRACKPAD_FINGER_TYPE5
+typedef struct _TRACKPAD_MOUSE_REPORT
+{
+	UINT8 reportId; // 0x2
+	UINT8 buttons;
+	UINT8 x;
+	UINT8 y;
+	UINT8 unused[4]; // Usually remain constants
+} TRACKPAD_MOUSE_REPORT;
+
+typedef struct _TRACKPAD_FINGER_MT2
 {
 	UINT32 coords;			/* absolute x coodinate */
 	UCHAR touchMajor;			/* touch area, major axis */
@@ -50,20 +59,20 @@ struct TRACKPAD_FINGER_TYPE5
 	UCHAR pressure;				/* pressure on forcetouch touchpad */
 	UCHAR id : 4;
 	UCHAR orientation : 4;
-};
+} TRACKPAD_FINGER_MT2;
 
-struct TRACKPAD_REPORT_TYPE5
+typedef struct _TRACKPAD_REPORT_MT2
 {
 	UCHAR reportId;
 	UINT8 clicks : 1;
 	UINT8 : 2;
 	UINT8 timestampLow : 5;
 	UINT16 timestampHigh;
-	struct TRACKPAD_FINGER_TYPE5 fingers[];
-};
+	TRACKPAD_FINGER_MT2 fingers[];
+} TRACKPAD_REPORT_MT2;
 
 #pragma warning( pop )
 #pragma pack( pop )
 
-static_assert(sizeof(struct TRACKPAD_FINGER_TYPE5) == 9, "Unexpected MAGIC_TRACKPAD_INPUT_REPORT_FINGER size");
-static_assert(sizeof(struct TRACKPAD_REPORT_TYPE5) == 4, "Unexpected MAGIC_TRACKPAD_INPUT_REPORT_FINGER size");
+static_assert(sizeof(TRACKPAD_FINGER_MT2) == 9, "Unexpected MAGIC_TRACKPAD_INPUT_REPORT_FINGER size");
+static_assert(sizeof(TRACKPAD_REPORT_MT2) == 4, "Unexpected MAGIC_TRACKPAD_INPUT_REPORT_FINGER size");
